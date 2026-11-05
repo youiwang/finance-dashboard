@@ -10,7 +10,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # 可以直接貼上整串 Google Sheet URL，或是使用 Spreadsheet ID
 df = conn.read(
     spreadsheet="https://docs.google.com/spreadsheets/d/1WvqwEcs-k92EXw90P_6hY5bqgZgA3jyMDFNSQZbP3AA/edit?gid=0#gid=0", 
-    worksheet="工作表1" # 替換成你的分頁名稱
+    worksheet="portfolio" 
 )
 
 st.write("目前持股與現金部位狀態：")
