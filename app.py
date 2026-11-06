@@ -24,6 +24,8 @@ from modules.risk_management import (
 
 from modules.performance import (
     show_performance_dashboard,
+    build_positions_from_performance,
+    merge_portfolio_overrides,
 )
 
 from modules.macro_economy import (
@@ -33,6 +35,19 @@ from modules.macro_economy import (
 from modules.loan_calculator import (
     calculate_loan,
 )
+
+
+def _to_arrow_safe_dataframe(df):
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    safe_df = df.copy()
+
+    for col in safe_df.columns:
+        if pd.api.types.is_object_dtype(safe_df[col]):
+            safe_df[col] = safe_df[col].astype(str)
+
+    return safe_df
 
 
 # ==========================================
@@ -63,8 +78,15 @@ with st.spinner("正在同步 Google Sheets 與市場資料..."):
 
     data = raw_data.copy()
 
-    data["portfolio"] = normalize_portfolio(
+    manual_portfolio = normalize_portfolio(
         raw_data["portfolio"]
+    )
+    auto_portfolio = build_positions_from_performance(
+        raw_data.get("performance", pd.DataFrame())
+    )
+    data["portfolio"] = merge_portfolio_overrides(
+        auto_portfolio,
+        manual_portfolio
     )
 
     data["capital"] = normalize_capital(
@@ -100,7 +122,7 @@ with st.sidebar:
 
     st.write("資料來源：Google Sheets")
 
-    if st.button("🔄 重新整理資料", use_container_width=True):
+    if st.button("🔄 重新整理資料", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -196,14 +218,14 @@ if not asset_data.empty:
 
         st.plotly_chart(
             fig,
-            use_container_width=True
+            width="stretch"
         )
 
     with col2:
 
         st.dataframe(
-            asset_data,
-            use_container_width=True,
+            _to_arrow_safe_dataframe(asset_data),
+            width="stretch",
             hide_index=True
         )
 
@@ -232,8 +254,8 @@ with tab1:
         )
 
         st.dataframe(
-            portfolio,
-            use_container_width=True,
+            _to_arrow_safe_dataframe(portfolio),
+            width="stretch",
             hide_index=True
         )
 
@@ -251,8 +273,8 @@ with tab2:
         )
 
         st.dataframe(
-            crypto,
-            use_container_width=True,
+            _to_arrow_safe_dataframe(crypto),
+            width="stretch",
             hide_index=True
         )
 
@@ -462,8 +484,8 @@ with st.expander("🔍 查看 Google Sheets 原始資料"):
 
         if isinstance(df, pd.DataFrame) and not df.empty:
             st.dataframe(
-                df,
-                use_container_width=True
+                _to_arrow_safe_dataframe(df),
+                width="stretch"
             )
         else:
             st.info("目前沒有資料。")

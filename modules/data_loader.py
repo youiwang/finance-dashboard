@@ -24,6 +24,10 @@ SHEETS = {
     "performance": "Performance",
 }
 
+SHEET_ALIASES = {
+    "performance": ["Performance", "Trade Log", "下單紀錄", "交易紀錄"],
+}
+
 # DEFAULT_CASHFLOW = {
 #     "每月薪資收入": 80000,
 #     "其他收入": 0,
@@ -35,29 +39,167 @@ SHEETS = {
 # }
 
 def read_sheet(name, required=False):
-    try:
-        conn = get_connection()
+    conn = get_connection()
+    sheet_candidates = SHEET_ALIASES.get(
+        name, [SHEETS[name]]
+    )
+    last_error = None
 
-        df = conn.read(
-            spreadsheet=SHEET_URL,
-            worksheet=SHEETS[name],
-            ttl=0
+    for worksheet_name in sheet_candidates:
+        try:
+            df = conn.read(
+                spreadsheet=SHEET_URL,
+                worksheet=worksheet_name,
+                ttl=0
+            )
+
+            if df is None:
+                continue
+
+            return df.dropna(how="all").reset_index(drop=True)
+
+        except Exception as e:
+            last_error = e
+            continue
+
+    if required:
+        st.error(f"讀取 {name} 工作表失敗：{last_error}")
+        st.stop()
+
+    if name == "performance":
+        st.warning(
+            "工作表 Performance / Trade Log / 下單紀錄 尚未建立或無法讀取。"
         )
-
-        if df is None:
-            return pd.DataFrame()
-
-        return df.dropna(how="all").reset_index(drop=True)
-
-    except Exception as e:
-        if required:
-            st.error(f"讀取 {name} 工作表失敗：{e}")
-            st.stop()
-
+    else:
         st.warning(
             f"工作表 {SHEETS[name]} 尚未建立或無法讀取。"
         )
+    return pd.DataFrame()
+
+
+def _normalize_portfolio_symbol(value):
+    text = str(value).strip().upper()
+    if not text or text.lower() == "nan":
+        return ""
+
+    if ":" in text:
+        text = text.split(":")[-1].strip()
+
+    if text.endswith(".TW") or text.endswith(".TWO"):
+        text = text.split(".")[0].strip()
+
+    if text.endswith(".0"):
+        try:
+            text = str(int(float(text)))
+        except ValueError:
+            return text
+
+    if text.isdigit():
+        text = text.zfill(4)
+
+    return text
+
+
+def _apply_portfolio_aliases(df):
+    aliases = {
+        "代號": ["代號", "股票代號", "代碼", "symbol"],
+        "標的名稱": ["標的名稱", "名稱", "name"],
+        "持有股數": ["持有股數", "持有數量", "股數", "quantity"],
+        "平均成本": ["平均成本", "成本", "cost"],
+        "總成本": ["總成本", "持有成本"],
+        "即時股價": ["即時股價", "目前股價", "股價", "price"],
+        "即時市值": ["即時市值", "市值", "market_value"],
+        "未實現損益": ["未實現損益", "損益", "pnl"],
+        "幣別": ["幣別", "Currency", "currency"],
+        "資產類型": ["資產類型", "類型", "asset_type"],
+    }
+
+    for target, candidates in aliases.items():
+        if target not in df.columns:
+            for candidate in candidates:
+                if candidate in df.columns:
+                    df[target] = df[candidate]
+                    break
+
+        if target not in df.columns:
+            df[target] = (
+                "TWD"
+                if target == "幣別"
+                else ""
+                if target in ["標的名稱", "資產類型"]
+                else 0
+            )
+
+    return df
+
+
+def _clean_portfolio_rows(df):
+    numeric_cols = [
+        "持有股數",
+        "平均成本",
+        "總成本",
+        "即時股價",
+        "即時市值",
+        "未實現損益",
+    ]
+
+    for col in numeric_cols:
+        df[col] = df[col].apply(clean_number)
+
+    df["代號"] = df["代號"].apply(_normalize_portfolio_symbol)
+    df["標的名稱"] = df["標的名稱"].astype(str).replace("nan", "")
+    df["幣別"] = df["幣別"].fillna("TWD").replace("", "TWD")
+
+    invalid = {"", "NAN", "NONE", "0", "0000"}
+    df = df[~df["代號"].isin(invalid)].copy()
+
+    df = df[
+        (df["持有股數"] > 0)
+        | (df["總成本"] > 0)
+        | (df["即時市值"] > 0)
+        | (df["即時股價"] > 0)
+    ].copy()
+
+    return df.reset_index(drop=True)
+
+
+def _normalize_portfolio_column_format(df):
+    first_col = df.columns[0]
+    df[first_col] = df[first_col].astype(str).str.strip()
+    df = df.set_index(first_col).T
+    df.index.name = "原始欄位"
+    df = df.reset_index(drop=True)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    df = _apply_portfolio_aliases(df)
+    return _clean_portfolio_rows(df)
+
+
+def _normalize_portfolio_row_format(df):
+    df.columns = [str(c).strip() for c in df.columns]
+    df = _apply_portfolio_aliases(df)
+    return _clean_portfolio_rows(df)
+
+
+def normalize_portfolio(df):
+    """
+    Portfolio 支援：
+    1. 直向欄位格式：第一欄是欄位名稱，後面是各標的（舊版）
+    2. 標準列表格式：每列一個標的（新版）
+    """
+    if df.empty:
         return pd.DataFrame()
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    row_format_markers = {"代號", "持有股數", "平均成本", "總成本"}
+    marker_count = len(row_format_markers.intersection(set(df.columns)))
+
+    if marker_count >= 2:
+        return _normalize_portfolio_row_format(df)
+
+    return _normalize_portfolio_column_format(df)
 
 
 def clean_number(value):
@@ -110,113 +252,6 @@ def normalize_table(df):
 
     return df
 
-
-def normalize_portfolio(df):
-    """
-    Portfolio 橫向格式：
-    A欄為資料項目
-    B欄以後為各個投資標的
-    """
-
-    if df.empty:
-        return pd.DataFrame()
-
-    df = df.copy()
-
-    df.columns = [
-        str(c).strip()
-        for c in df.columns
-    ]
-
-    # 第一欄是資料項目
-    first_col = df.columns[0]
-
-    df[first_col] = (
-        df[first_col]
-        .astype(str)
-        .str.strip()
-    )
-
-    # 將資料項目轉成欄位名稱
-    df = df.set_index(first_col).T
-
-    df.index.name = "原始欄位"
-
-    df = df.reset_index(drop=True)
-
-    # 欄位名稱統一
-    df.columns = [
-        str(c).strip()
-        for c in df.columns
-    ]
-
-    aliases = {
-        "代號": ["代號", "股票代號", "代碼"],
-        "標的名稱": ["標的名稱", "名稱"],
-        "持有股數": ["持有股數", "持有數量", "股數"],
-        "平均成本": ["平均成本", "成本"],
-        "總成本": ["總成本"],
-        "即時股價": ["即時股價", "目前股價", "股價"],
-        "即時市值": ["即時市值", "市值"],
-        "未實現損益": ["未實現損益", "損益"],
-        "幣別": ["幣別", "Currency"],
-        "資產類型": ["資產類型", "類型"],
-    }
-
-    for target, candidates in aliases.items():
-
-        if target not in df.columns:
-
-            for candidate in candidates:
-
-                if candidate in df.columns:
-                    df[target] = df[candidate]
-                    break
-
-        if target not in df.columns:
-
-            df[target] = (
-                "TWD"
-                if target == "幣別"
-                else ""
-                if target in ["標的名稱", "資產類型"]
-                else 0
-            )
-
-    from modules.data_loader import clean_number
-
-    # 數字欄位清理
-    numeric_cols = [
-        "持有股數",
-        "平均成本",
-        "總成本",
-        "即時股價",
-        "即時市值",
-        "未實現損益",
-    ]
-
-    for col in numeric_cols:
-        df[col] = df[col].apply(clean_number)
-
-    df["代號"] = (
-        df["代號"]
-        .astype(str)
-        .str.strip()
-    )
-
-    df["幣別"] = (
-        df["幣別"]
-        .fillna("TWD")
-        .replace("", "TWD")
-    )
-
-    # 移除空白標的
-    df = df[
-        df["代號"].ne("")
-        & df["代號"].str.lower().ne("nan")
-    ]
-
-    return df.reset_index(drop=True)
 
 def normalize_capital(df):
     """
