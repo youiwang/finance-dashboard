@@ -113,30 +113,45 @@ def normalize_table(df):
 
 def normalize_portfolio(df):
     """
-    支援目前 Portfolio 的橫向格式：
-    第一列是代號，第二列是名稱，
-    第三列股數，第四列成本。
+    Portfolio 橫向格式：
+    A欄為資料項目
+    B欄以後為各個投資標的
     """
+
     if df.empty:
         return pd.DataFrame()
 
     df = df.copy()
 
-    first = str(df.iloc[0, 0]).strip()
+    df.columns = [
+        str(c).strip()
+        for c in df.columns
+    ]
 
-    if first in ["代號", "股票代號", "代碼"]:
-        df.columns = df.iloc[0].astype(str).str.strip()
-        df = df.iloc[1:].reset_index(drop=True)
+    # 第一欄是資料項目
+    first_col = df.columns[0]
 
-        # 將列名稱轉為欄位
-        df = df.set_index(df.columns[0]).T
-        df.index.name = "代號"
-        df = df.reset_index()
+    df[first_col] = (
+        df[first_col]
+        .astype(str)
+        .str.strip()
+    )
 
-    else:
-        df.columns = [str(c).strip() for c in df.columns]
+    # 將資料項目轉成欄位名稱
+    df = df.set_index(first_col).T
+
+    df.index.name = "原始欄位"
+
+    df = df.reset_index(drop=True)
+
+    # 欄位名稱統一
+    df.columns = [
+        str(c).strip()
+        for c in df.columns
+    ]
 
     aliases = {
+        "代號": ["代號", "股票代號", "代碼"],
         "標的名稱": ["標的名稱", "名稱"],
         "持有股數": ["持有股數", "持有數量", "股數"],
         "平均成本": ["平均成本", "成本"],
@@ -149,33 +164,59 @@ def normalize_portfolio(df):
     }
 
     for target, candidates in aliases.items():
+
         if target not in df.columns:
+
             for candidate in candidates:
+
                 if candidate in df.columns:
                     df[target] = df[candidate]
                     break
 
         if target not in df.columns:
-            df[target] = 0 if target not in [
-                "標的名稱", "幣別", "資產類型"
-            ] else ""
 
-    df["代號"] = df["代號"].astype(str).str.strip()
+            df[target] = (
+                "TWD"
+                if target == "幣別"
+                else ""
+                if target in ["標的名稱", "資產類型"]
+                else 0
+            )
 
-    for col in [
+    from modules.data_loader import clean_number
+
+    # 數字欄位清理
+    numeric_cols = [
         "持有股數",
         "平均成本",
         "總成本",
         "即時股價",
         "即時市值",
-        "未實現損益"
-    ]:
+        "未實現損益",
+    ]
+
+    for col in numeric_cols:
         df[col] = df[col].apply(clean_number)
 
-    df["幣別"] = df["幣別"].replace("", "TWD").fillna("TWD")
+    df["代號"] = (
+        df["代號"]
+        .astype(str)
+        .str.strip()
+    )
 
-    return df[df["代號"].ne("")].reset_index(drop=True)
+    df["幣別"] = (
+        df["幣別"]
+        .fillna("TWD")
+        .replace("", "TWD")
+    )
 
+    # 移除空白標的
+    df = df[
+        df["代號"].ne("")
+        & df["代號"].str.lower().ne("nan")
+    ]
+
+    return df.reset_index(drop=True)
 
 def normalize_capital(df):
     """
