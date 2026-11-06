@@ -15,7 +15,8 @@ def get_ndc_light():
     try:
         # 國發會開放資料 API (綜合判斷分數)
         url = "https://openapi.ndc.gov.tw/api/odata/od/Indicators?$top=1&$orderby=date%20desc"
-        res = requests.get(url).json()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        res = requests.get(url, headers=headers, timeout=10).json()
         score = int(res['value'][0]['Value'])
         
         # 判斷燈號顏色
@@ -84,8 +85,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1WvqwEcs-k92EXw90P_6hY5bqgZgA3jyMDFNSQZbP3AA/edit?gid=0#gid=0"
 
 try:
-    df_portfolio = conn.read(spreadsheet=SHEET_URL, worksheet="Portfolio")
-    df_capital = conn.read(spreadsheet=SHEET_URL, worksheet="Capital")
+    df_portfolio = conn.read(spreadsheet=SHEET_URL, worksheet="Portfolio", ttl=0)
+    df_capital = conn.read(spreadsheet=SHEET_URL, worksheet="Capital", ttl=0)
 except Exception as e:
     st.error(f"讀取 Google Sheets 失敗，請確認網址與工作表名稱是否正確。錯誤訊息: {e}")
     st.stop()
